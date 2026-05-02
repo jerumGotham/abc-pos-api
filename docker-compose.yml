@@ -1,0 +1,16 @@
+services:
+  abc-pos-postgres:
+    image: postgres:16
+    container_name: abc-pos-postgres
+    restart: always
+    ports:
+      - "5435:5432"
+    environment:
+      POSTGRES_USER: abc_user
+      POSTGRES_PASSWORD: abc_password
+      POSTGRES_DB: abc_pos_db
+    volumes:
+      - abc_pos_postgres_data:/var/lib/postgresql/data
+
+volumes:
+  abc_pos_postgres_data:
