@@ -119,10 +119,18 @@ app.get("/orders", async (req, res) => {
         items: {
           include: {
             product: true,
+            variant: true,
+          },
+          orderBy: {
+            product: {
+              name: "asc",
+            },
           },
         },
       },
-      orderBy: { createdAt: "desc" },
+      orderBy: {
+        createdAt: "desc",
+      },
     });
 
     res.json(orders);
@@ -216,6 +224,102 @@ app.post("/orders", async (req, res) => {
     res.json(order);
   } catch (error) {
     res.status(500).json({ message: "Failed to create order", error });
+  }
+});
+
+async function recalculateOrder(orderId: string) {
+  const items = await prisma.orderItem.findMany({ where: { orderId } });
+
+  const subtotal = items.reduce((sum, item) => sum + item.total, 0);
+
+  return prisma.order.update({
+    where: { id: orderId },
+    data: {
+      subtotal,
+      total: subtotal,
+    },
+    include: {
+      customer: true,
+      items: {
+        include: {
+          product: true,
+          variant: true,
+        },
+      },
+    },
+  });
+}
+
+app.patch("/orders/:orderId/items/:itemId", async (req, res) => {
+  try {
+    const { orderId, itemId } = req.params;
+    const { quantity, price } = req.body;
+
+    await prisma.orderItem.update({
+      where: { id: itemId },
+      data: {
+        quantity: Number(quantity),
+        price: Number(price),
+        total: Number(quantity) * Number(price),
+      },
+    });
+
+    const order = await recalculateOrder(orderId);
+    res.json(order);
+  } catch (error) {
+    res.status(500).json({ message: "Failed to update item", error });
+  }
+});
+
+app.delete("/orders/:orderId/items/:itemId", async (req, res) => {
+  try {
+    const { orderId, itemId } = req.params;
+
+    await prisma.orderItem.delete({
+      where: { id: itemId },
+    });
+
+    const order = await recalculateOrder(orderId);
+    res.json(order);
+  } catch (error) {
+    res.status(500).json({ message: "Failed to delete item", error });
+  }
+});
+
+app.post("/orders/:orderId/items", async (req, res) => {
+  try {
+    const { orderId } = req.params;
+    const { productId, variantId, quantity, price } = req.body;
+
+    await prisma.orderItem.create({
+      data: {
+        orderId,
+        productId,
+        variantId,
+        quantity: Number(quantity),
+        price: Number(price),
+        total: Number(quantity) * Number(price),
+      },
+    });
+
+    const order = await recalculateOrder(orderId);
+    res.json(order);
+  } catch (error) {
+    res.status(500).json({ message: "Failed to add item", error });
+  }
+});
+
+app.delete("/orders/:orderId", async (req, res) => {
+  try {
+    const { orderId } = req.params;
+
+    await prisma.order.delete({
+      where: { id: orderId },
+    });
+
+    res.json({ message: "Invoice deleted" });
+  } catch (error) {
+    res.status(500).json({ message: "Failed to delete invoice", error });
   }
 });
 

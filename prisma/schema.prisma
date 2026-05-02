@@ -36,6 +36,8 @@ model ProductVariant {
   price     Int
 
   product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  orderItems OrderItem[]
 }
 
 model Order {
@@ -70,8 +72,9 @@ model OrderItem {
   price     Int
   total     Int
 
-  order   Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  product Product @relation(fields: [productId], references: [id])
+  order   Order          @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product Product        @relation(fields: [productId], references: [id])
+  variant ProductVariant @relation(fields: [variantId], references: [id])
 }
 
 enum ProductCategory {

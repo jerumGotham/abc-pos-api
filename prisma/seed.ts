@@ -10,6 +10,7 @@ async function main() {
   await prisma.order.deleteMany();
   await prisma.productVariant.deleteMany();
   await prisma.product.deleteMany();
+  await prisma.customer.deleteMany();
 
   // ======================
   // 🍪 COOKIES
