@@ -63,6 +63,15 @@ app.get("/dashboard", async (req, res) => {
       Object.entries(productsSold).sort((a, b) => b[1] - a[1])[0]?.[0] ||
       "No sales yet";
 
+    const recentTodayOrders = todayOrders.slice(0, 10).map((order) => ({
+      id: order.id,
+      invoiceNo: order.invoiceNo,
+      customerId: order.customerId,
+      customerName: order.customerName,
+      total: order.total,
+      createdAt: order.createdAt,
+    }));
+
     res.json({
       todaySales,
       todayOrders: todayOrders.length,
@@ -70,6 +79,7 @@ app.get("/dashboard", async (req, res) => {
       totalCustomers,
       bestSeller,
       productsSold,
+      recentTodayOrders,
     });
   } catch (error) {
     res.status(500).json({ message: "Failed to get dashboard", error });
@@ -108,6 +118,92 @@ app.post("/products", async (req, res) => {
     res.json(product);
   } catch (error) {
     res.status(500).json({ message: "Failed to create product", error });
+  }
+});
+
+app.patch("/products/:id", async (req, res) => {
+  try {
+    const { name, category, variants } = req.body;
+    const productId = req.params.id;
+
+    // 1. Update product
+    await prisma.product.update({
+      where: { id: productId },
+      data: { name, category },
+    });
+
+    // 2. Get existing variants
+    const existing = await prisma.productVariant.findMany({
+      where: { productId },
+    });
+
+    // 3. Split incoming
+    const incomingWithId = variants.filter((v: any) => v.id);
+    const incomingWithoutId = variants.filter((v: any) => !v.id);
+
+    const incomingIds = incomingWithId.map((v: any) => v.id);
+
+    // 4. Find variants to delete (not in incoming)
+    const toDelete = existing.filter((v) => !incomingIds.includes(v.id));
+
+    // 5. Only delete if NOT used
+    for (const v of toDelete) {
+      const used = await prisma.orderItem.findFirst({
+        where: { variantId: v.id },
+      });
+
+      if (!used) {
+        await prisma.productVariant.delete({
+          where: { id: v.id },
+        });
+      }
+    }
+
+    // 6. Update existing variants
+    for (const v of incomingWithId) {
+      await prisma.productVariant.update({
+        where: { id: v.id },
+        data: {
+          label: v.label,
+          price: Number(v.price),
+        },
+      });
+    }
+
+    // 7. Create new variants
+    for (const v of incomingWithoutId) {
+      await prisma.productVariant.create({
+        data: {
+          productId,
+          label: v.label,
+          price: Number(v.price),
+        },
+      });
+    }
+
+    // 8. Return updated
+    const updated = await prisma.product.findUnique({
+      where: { id: productId },
+      include: { variants: true },
+    });
+
+    res.json(updated);
+  } catch (error) {
+    console.log("UPDATE PRODUCT ERROR:", error);
+    res.status(500).json({ message: "Failed to update product", error });
+  }
+});
+
+app.delete("/products/:id", async (req, res) => {
+  try {
+    await prisma.product.update({
+      where: { id: req.params.id },
+      data: { isActive: false },
+    });
+
+    res.json({ message: "Product deleted" });
+  } catch (error) {
+    res.status(500).json({ message: "Failed to delete product", error });
   }
 });
 
@@ -376,18 +472,31 @@ app.get("/customers", async (req, res) => {
   try {
     const search = String(req.query.search || "").trim();
 
-    if (!search) {
-      return res.json([]);
-    }
-
     const customers = await prisma.customer.findMany({
-      where: {
-        name: {
-          contains: search,
-          mode: "insensitive",
+      where: search
+        ? {
+            OR: [
+              { name: { contains: search, mode: "insensitive" } },
+              { contact: { contains: search, mode: "insensitive" } },
+              { address: { contains: search, mode: "insensitive" } },
+              { platform: { contains: search, mode: "insensitive" } },
+            ],
+          }
+        : {},
+      include: {
+        orders: {
+          include: {
+            items: {
+              include: {
+                product: true,
+                variant: true,
+              },
+            },
+          },
+          orderBy: { createdAt: "desc" },
         },
       },
-      take: 8,
+      take: search ? 8 : undefined,
       orderBy: {
         createdAt: "desc",
       },
@@ -395,7 +504,7 @@ app.get("/customers", async (req, res) => {
 
     res.json(customers);
   } catch (error) {
-    res.status(500).json({ message: "Failed to search customers", error });
+    res.status(500).json({ message: "Failed to get customers", error });
   }
 });
 
@@ -415,6 +524,102 @@ app.post("/customers", async (req, res) => {
     res.json(customer);
   } catch (error) {
     res.status(500).json({ message: "Failed to create customer", error });
+  }
+});
+
+// GET all customers + search
+app.get("/customers", async (req, res) => {
+  try {
+    const search = String(req.query.search || "").trim();
+
+    const customers = await prisma.customer.findMany({
+      where: search
+        ? {
+            OR: [
+              { name: { contains: search, mode: "insensitive" } },
+              { contact: { contains: search, mode: "insensitive" } },
+              { address: { contains: search, mode: "insensitive" } },
+            ],
+          }
+        : {},
+      include: {
+        orders: {
+          include: {
+            items: {
+              include: {
+                product: true,
+                variant: true,
+              },
+            },
+          },
+          orderBy: { createdAt: "desc" },
+        },
+      },
+      orderBy: { createdAt: "desc" },
+    });
+
+    res.json(customers);
+  } catch (error) {
+    res.status(500).json({ message: "Failed to get customers", error });
+  }
+});
+
+// GET one customer history
+app.get("/customers/:id", async (req, res) => {
+  try {
+    const customer = await prisma.customer.findUnique({
+      where: { id: req.params.id },
+      include: {
+        orders: {
+          include: {
+            items: {
+              include: {
+                product: true,
+                variant: true,
+              },
+            },
+          },
+          orderBy: { createdAt: "desc" },
+        },
+      },
+    });
+
+    if (!customer) {
+      return res.status(404).json({ message: "Customer not found" });
+    }
+
+    res.json(customer);
+  } catch (error) {
+    res.status(500).json({ message: "Failed to get customer", error });
+  }
+});
+
+// UPDATE customer
+app.patch("/customers/:id", async (req, res) => {
+  try {
+    const { name, contact, address, platform } = req.body;
+
+    const customer = await prisma.customer.update({
+      where: { id: req.params.id },
+      data: { name, contact, address, platform },
+    });
+
+    res.json(customer);
+  } catch (error) {
+    res.status(500).json({ message: "Failed to update customer", error });
+  }
+});
+
+// DELETE customer
+app.delete("/customers/:id", async (req, res) => {
+  try {
+    await prisma.customer.delete({
+      where: { id: req.params.id },
+    });
+
+    res.json({ message: "Customer deleted" });
+  } catch (error) {
+    res.status(500).json({ message: "Failed to delete customer", error });
   }
 });
 

@@ -51,7 +51,7 @@ model Order {
   deliveryAt      DateTime?
   paymentMethod   PaymentMethod
   paymentStatus   PaymentStatus
-  orderStatus     OrderStatus   @default(PENDING)
+  orderStatus     OrderStatus   @default(COMPLETED)
   subtotal        Int
   discount        Int           @default(0)
   deliveryFee     Int           @default(0)
