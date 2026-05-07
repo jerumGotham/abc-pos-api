@@ -96,6 +96,7 @@ app.get("/products", async (req, res) => {
 
     res.json(products);
   } catch (error) {
+    console.log("GET ORDERS ERROR:", error);
     res.status(500).json({ message: "Failed to get products", error });
   }
 });
@@ -231,6 +232,7 @@ app.get("/orders", async (req, res) => {
 
     res.json(orders);
   } catch (error) {
+    console.log("GET ORDERS ERROR:", error);
     res.status(500).json({ message: "Failed to get orders", error });
   }
 });
