@@ -237,6 +237,13 @@ app.get("/orders", async (req, res) => {
   }
 });
 
+app.get("/version", (req, res) => {
+  res.json({
+    version: "orders-fix-v2",
+    time: new Date().toISOString(),
+  });
+});
+
 function generateInvoiceNo() {
   const date = new Date().toISOString().slice(0, 10).replace(/-/g, "");
   const time = Date.now();
