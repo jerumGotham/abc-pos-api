@@ -4,9 +4,8 @@
   "main": "src/server.ts",
   "scripts": {
     "dev": "ts-node-dev --respawn src/server.ts",
-    "prisma:migrate": "prisma migrate dev",
-    "prisma:studio": "prisma studio",
-    "prisma:generate": "prisma generate"
+    "build": "tsc && npx prisma generate",
+    "start": "node dist/server.js"
   },
   "dependencies": {
     "@prisma/client": "^6.19.3",
