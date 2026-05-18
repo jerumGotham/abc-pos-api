@@ -237,6 +237,14 @@ app.get("/orders", async (req, res) => {
   }
 });
 
+function generateInvoiceNo() {
+  const date = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+  const time = Date.now();
+  const random = Math.floor(1000 + Math.random() * 9000);
+
+  return `INV-${date}-${time}-${random}`;
+}
+
 app.post("/orders", async (req, res) => {
   try {
     const {
@@ -274,18 +282,16 @@ app.post("/orders", async (req, res) => {
     }
 
     const subtotal = items.reduce(
-      (sum: number, item: any) => sum + item.price * item.quantity,
+      (sum: number, item: any) =>
+        sum + Number(item.price) * Number(item.quantity),
       0,
     );
 
-    const total = subtotal - discount + deliveryFee;
-
-    const count = await prisma.order.count();
-    const invoiceNo = `INV-${String(count + 1).padStart(5, "0")}`;
+    const total = subtotal - Number(discount) + Number(deliveryFee);
 
     const order = await prisma.order.create({
       data: {
-        invoiceNo,
+        invoiceNo: generateInvoiceNo(),
         customerId: finalCustomerId,
         customerName,
         customerPhone,
@@ -295,17 +301,17 @@ app.post("/orders", async (req, res) => {
         paymentMethod,
         paymentStatus,
         subtotal,
-        discount,
-        deliveryFee,
+        discount: Number(discount),
+        deliveryFee: Number(deliveryFee),
         total,
         notes,
         items: {
           create: items.map((item: any) => ({
             productId: item.productId,
             variantId: item.variantId,
-            quantity: item.quantity,
-            price: item.price,
-            total: item.price * item.quantity,
+            quantity: Number(item.quantity),
+            price: Number(item.price),
+            total: Number(item.price) * Number(item.quantity),
           })),
         },
       },
@@ -320,8 +326,15 @@ app.post("/orders", async (req, res) => {
     });
 
     res.json(order);
-  } catch (error) {
-    res.status(500).json({ message: "Failed to create order", error });
+  } catch (error: any) {
+    console.error("CREATE ORDER ERROR:", error);
+
+    res.status(500).json({
+      message: "Failed to create order",
+      error: error.message,
+      code: error.code,
+      meta: error.meta,
+    });
   }
 });
 
