@@ -247,9 +247,8 @@ app.get("/version", (req, res) => {
 function generateInvoiceNo() {
   const date = new Date().toISOString().slice(0, 10).replace(/-/g, "");
   const time = Date.now();
-  const random = Math.floor(1000 + Math.random() * 9000);
 
-  return `INV-${date}-${time}-${random}`;
+  return `INV-${time}`;
 }
 
 app.post("/orders", async (req, res) => {
@@ -327,6 +326,7 @@ app.post("/orders", async (req, res) => {
         items: {
           include: {
             product: true,
+            variant: true,
           },
         },
       },
