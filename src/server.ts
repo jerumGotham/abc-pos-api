@@ -245,10 +245,7 @@ app.get("/version", (req, res) => {
 });
 
 function generateInvoiceNo() {
-  const date = new Date().toISOString().slice(0, 10).replace(/-/g, "");
-  const time = Date.now();
-
-  return `INV-${time}`;
+  return "INV-" + Date.now().toString(36).toUpperCase();
 }
 
 app.post("/orders", async (req, res) => {
@@ -270,6 +267,10 @@ app.post("/orders", async (req, res) => {
 
     if (!items || items.length === 0) {
       return res.status(400).json({ message: "Items are required" });
+    }
+
+    if (items.some((item: any) => !item?.productId || !item?.variantId)) {
+      return res.status(400).json({ message: "Each item requires a productId and variantId" });
     }
 
     let finalCustomerId = customerId;
@@ -408,6 +409,10 @@ app.post("/orders/:orderId/items", async (req, res) => {
   try {
     const { orderId } = req.params;
     const { productId, variantId, quantity, price } = req.body;
+
+    if (!productId || !variantId) {
+      return res.status(400).json({ message: "productId and variantId are required" });
+    }
 
     await prisma.orderItem.create({
       data: {
