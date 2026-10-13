@@ -1,15 +1,143 @@
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
-import { PrismaClient } from "@prisma/client";
+import rateLimit from "express-rate-limit";
+import { PaymentMethod, PrismaClient } from "@prisma/client";
 
 dotenv.config();
 
 const app = express();
 const prisma = new PrismaClient();
 
-app.use(cors());
+const corsOrigins = (process.env.CORS_ORIGINS || "")
+  .split(",")
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+
+app.use(
+  cors({
+    origin(origin, callback) {
+      if (!origin || corsOrigins.includes(origin)) {
+        callback(null, true);
+        return;
+      }
+
+      callback(new Error("Origin not allowed by CORS"));
+    },
+  }),
+);
 app.use(express.json());
+
+const publicEndpointLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 30,
+  standardHeaders: "draft-7",
+  legacyHeaders: false,
+  message: { message: "Too many requests. Please try again later." },
+});
+
+const expoPushTokenPattern = /^(ExponentPushToken|ExpoPushToken)\[[^\]]+\]$/;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function parseWebsiteOrder(body: unknown) {
+  if (!isRecord(body)) {
+    return { error: "Invalid request body" } as const;
+  }
+
+  const { customerName, customerEmail, customerPhone, customerAddress, paymentMethod, deliveryAt, notes, items } = body;
+
+  if (!isNonEmptyString(customerName) || !isNonEmptyString(customerEmail) || !isNonEmptyString(customerPhone) || !isNonEmptyString(customerAddress)) {
+    return { error: "Customer name, email, phone, and address are required" } as const;
+  }
+
+  if (!/^\S+@\S+\.\S+$/.test(customerEmail)) {
+    return { error: "A valid customer email is required" } as const;
+  }
+
+  if (!Object.values(PaymentMethod).includes(paymentMethod as PaymentMethod)) {
+    return { error: "A valid payment method is required" } as const;
+  }
+
+  let parsedDeliveryAt: Date | null = null;
+  if (deliveryAt !== undefined) {
+    if (!isNonEmptyString(deliveryAt) || Number.isNaN(Date.parse(deliveryAt))) {
+      return { error: "deliveryAt must be a valid ISO date" } as const;
+    }
+    parsedDeliveryAt = new Date(deliveryAt);
+  }
+
+  if (notes !== undefined && typeof notes !== "string") {
+    return { error: "notes must be a string" } as const;
+  }
+
+  if (!Array.isArray(items) || items.length === 0) {
+    return { error: "At least one item is required" } as const;
+  }
+
+  const parsedItems: Array<{ productId: string; variantId: string; quantity: number }> = [];
+  for (const item of items) {
+    if (!isRecord(item) || !isNonEmptyString(item.productId) || !isNonEmptyString(item.variantId) || typeof item.quantity !== "number" || !Number.isInteger(item.quantity) || item.quantity <= 0) {
+      return { error: "Each item requires a productId, variantId, and positive integer quantity" } as const;
+    }
+    parsedItems.push({ productId: item.productId, variantId: item.variantId, quantity: item.quantity });
+  }
+
+  return {
+    value: {
+      customerName: customerName.trim(),
+      customerEmail: customerEmail.trim().toLowerCase(),
+      customerPhone: customerPhone.trim(),
+      customerAddress: customerAddress.trim(),
+      paymentMethod: paymentMethod as PaymentMethod,
+      deliveryAt: parsedDeliveryAt,
+      notes: typeof notes === "string" ? notes.trim() || null : null,
+      items: parsedItems,
+    },
+  } as const;
+}
+
+async function sendWebsiteOrderNotification(order: { id: string; invoiceNo: string; customerName: string }) {
+  const tokens = await prisma.devicePushToken.findMany({ where: { active: true } });
+  if (tokens.length === 0) return;
+
+  try {
+    const response = await fetch("https://exp.host/--/api/v2/push/send", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify(
+        tokens.map(({ token }) => ({
+          to: token,
+          title: "New website order",
+          body: `${order.invoiceNo} - ${order.customerName}`,
+          data: { orderId: order.id, invoiceNo: order.invoiceNo, source: "WEBSITE" },
+        })),
+      ),
+    });
+
+    if (!response.ok) {
+      console.error("EXPO PUSH ERROR:", response.status);
+      return;
+    }
+
+    const result = (await response.json()) as { data?: Array<{ status?: string; details?: { error?: string } }> };
+    const invalidTokens = tokens
+      .filter((_, index) => result.data?.[index]?.details?.error === "DeviceNotRegistered")
+      .map(({ token }) => token);
+
+    if (invalidTokens.length > 0) {
+      await prisma.devicePushToken.updateMany({ where: { token: { in: invalidTokens } }, data: { active: false } });
+    }
+  } catch (error) {
+    console.error("EXPO PUSH ERROR:", error);
+  }
+}
 
 app.get("/", (req, res) => {
   res.json({ message: "ABC POS API running" });
@@ -244,6 +372,103 @@ app.get("/version", (req, res) => {
   });
 });
 
+app.post("/devices/push-token", publicEndpointLimiter, async (req, res) => {
+  const { token, platform, deviceLabel } = req.body || {};
+
+  if (!isNonEmptyString(token) || !expoPushTokenPattern.test(token) || !isNonEmptyString(platform)) {
+    return res.status(400).json({ message: "A valid Expo token and platform are required" });
+  }
+
+  if (deviceLabel !== undefined && typeof deviceLabel !== "string") {
+    return res.status(400).json({ message: "deviceLabel must be a string" });
+  }
+
+  try {
+    await prisma.devicePushToken.upsert({
+      where: { token },
+      create: { token, platform: platform.trim(), deviceLabel: deviceLabel?.trim() || null, active: true },
+      update: { platform: platform.trim(), deviceLabel: deviceLabel?.trim() || null, active: true },
+    });
+    res.status(204).send();
+  } catch (error) {
+    console.error("REGISTER PUSH TOKEN ERROR:", error);
+    res.status(500).json({ message: "Failed to register push token" });
+  }
+});
+
+app.post("/website-orders", publicEndpointLimiter, async (req, res) => {
+  const apiKey = process.env.WEBSITE_POS_API_KEY;
+  if (!apiKey || req.get("authorization") !== `Bearer ${apiKey}`) {
+    return res.status(401).json({ message: "Unauthorized" });
+  }
+
+  const parsed = parseWebsiteOrder(req.body);
+  if ("error" in parsed) {
+    return res.status(400).json({ message: parsed.error });
+  }
+
+  try {
+    const order = await prisma.$transaction(async (tx) => {
+      const variantIds = parsed.value.items.map((item) => item.variantId);
+      const variants = await tx.productVariant.findMany({
+        where: { id: { in: variantIds } },
+        include: { product: true },
+      });
+      const variantsById = new Map(variants.map((variant) => [variant.id, variant]));
+
+      const pricedItems = parsed.value.items.map((item) => {
+        const variant = variantsById.get(item.variantId);
+        if (!variant || variant.productId !== item.productId || !variant.product.isActive) {
+          throw new Error("INVALID_WEBSITE_ORDER_ITEM");
+        }
+        return { ...item, price: variant.price, total: variant.price * item.quantity };
+      });
+
+      const subtotal = pricedItems.reduce((sum, item) => sum + item.total, 0);
+      const customer = await tx.customer.create({
+        data: {
+          name: parsed.value.customerName,
+          email: parsed.value.customerEmail,
+          contact: parsed.value.customerPhone,
+          address: parsed.value.customerAddress,
+          platform: "WEBSITE",
+        },
+      });
+
+      return tx.order.create({
+        data: {
+          invoiceNo: generateInvoiceNo(),
+          customerId: customer.id,
+          customerName: parsed.value.customerName,
+          customerPhone: parsed.value.customerPhone,
+          customerAddress: parsed.value.customerAddress,
+          platform: "WEBSITE",
+          deliveryAt: parsed.value.deliveryAt,
+          paymentMethod: parsed.value.paymentMethod,
+          paymentStatus: "UNPAID",
+          orderStatus: "PENDING",
+          subtotal,
+          discount: 0,
+          deliveryFee: 0,
+          total: subtotal,
+          notes: parsed.value.notes,
+          items: { create: pricedItems },
+        },
+        select: { id: true, invoiceNo: true, paymentStatus: true, orderStatus: true, subtotal: true, total: true },
+      });
+    });
+
+    void sendWebsiteOrderNotification({ ...order, customerName: parsed.value.customerName });
+    res.status(201).json(order);
+  } catch (error) {
+    if (error instanceof Error && error.message === "INVALID_WEBSITE_ORDER_ITEM") {
+      return res.status(400).json({ message: "One or more items are unavailable" });
+    }
+    console.error("CREATE WEBSITE ORDER ERROR:", error);
+    res.status(500).json({ message: "Failed to create website order" });
+  }
+});
+
 function generateInvoiceNo() {
   return "INV-" + Date.now().toString(36).toUpperCase();
 }
@@ -269,7 +494,7 @@ app.post("/orders", async (req, res) => {
       return res.status(400).json({ message: "Items are required" });
     }
 
-    if (items.some((item: any) => !item?.productId || !item?.variantId)) {
+    if (items.some((item: any) => !isNonEmptyString(item?.productId) || !isNonEmptyString(item?.variantId))) {
       return res.status(400).json({ message: "Each item requires a productId and variantId" });
     }
 
@@ -410,7 +635,7 @@ app.post("/orders/:orderId/items", async (req, res) => {
     const { orderId } = req.params;
     const { productId, variantId, quantity, price } = req.body;
 
-    if (!productId || !variantId) {
+    if (!isNonEmptyString(productId) || !isNonEmptyString(variantId)) {
       return res.status(400).json({ message: "productId and variantId are required" });
     }
 
@@ -650,8 +875,11 @@ app.delete("/customers/:id", async (req, res) => {
   }
 });
 
-const PORT = process.env.PORT || 5000;
+export { app, parseWebsiteOrder };
 
-app.listen(Number(PORT), "0.0.0.0", () => {
-  console.log(`API running on http://0.0.0.0:${PORT}`);
-});
+if (require.main === module) {
+  const PORT = process.env.PORT || 5000;
+  app.listen(Number(PORT), "0.0.0.0", () => {
+    console.log(`API running on http://0.0.0.0:${PORT}`);
+  });
+}

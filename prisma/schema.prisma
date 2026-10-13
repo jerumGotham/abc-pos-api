@@ -10,12 +10,23 @@ datasource db {
 model Customer {
   id        String   @id @default(cuid())
   name      String
+  email     String?
   contact   String?
   address   String?
   platform  String?
   createdAt DateTime @default(now())
 
   orders Order[]
+}
+
+model DevicePushToken {
+  id          String   @id @default(cuid())
+  token       String   @unique
+  platform    String
+  deviceLabel String?
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 }
 
 model Product {

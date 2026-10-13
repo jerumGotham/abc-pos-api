@@ -5,21 +5,26 @@
   "scripts": {
     "dev": "ts-node-dev --respawn src/server.ts",
     "build": "prisma generate && tsc",
-    "start": "node dist/server.js"
+    "start": "node dist/server.js",
+    "test": "node --import tsx --test test/**/*.test.ts"
   },
   "dependencies": {
     "@prisma/client": "^6.19.3",
     "cors": "latest",
     "dotenv": "latest",
-    "express": "latest"
+    "express": "latest",
+    "express-rate-limit": "^8.6.2"
   },
   "devDependencies": {
     "@types/cors": "latest",
     "@types/express": "latest",
     "@types/node": "^25.6.0",
+    "@types/supertest": "^7.2.1",
     "prisma": "^6.19.3",
+    "supertest": "^7.2.2",
     "ts-node": "^10.9.2",
     "ts-node-dev": "latest",
+    "tsx": "^4.23.12",
     "typescript": "latest"
   },
   "prisma": {
