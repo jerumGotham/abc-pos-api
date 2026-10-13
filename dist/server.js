@@ -14,6 +14,9 @@ dotenv_1.default.config();
 const app = (0, express_1.default)();
 exports.app = app;
 const prisma = new client_1.PrismaClient();
+// Behind the Coolify reverse proxy: trust one proxy hop so req.ip is the real
+// client IP and the rate limiter does not put every client in the same bucket
+app.set("trust proxy", 1);
 const corsOrigins = (process.env.CORS_ORIGINS || "")
     .split(",")
     .map((origin) => origin.trim())
